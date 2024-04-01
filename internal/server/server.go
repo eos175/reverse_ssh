@@ -81,7 +81,16 @@ func Run(addr, dataDir, connectBackAddress, TLSCertPath, TLSKeyPath string, inse
 		if len(connectBackAddress) == 0 {
 			connectBackAddress = addr
 		}
-		go webserver.Start(multiplexer.ServerMultiplexer.HTTP(), connectBackAddress, "../", dataDir, private.PublicKey())
+
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		binDir := filepath.Dir(exePath)
+		projRoot := filepath.Dir(binDir)
+
+		go webserver.Start(multiplexer.ServerMultiplexer.HTTP(), connectBackAddress, projRoot, dataDir, private.PublicKey())
 
 	}
 

@@ -3,12 +3,14 @@ package commands
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"github.com/NHAS/reverse_ssh/internal"
 	"github.com/NHAS/reverse_ssh/internal/server/clients"
 	"github.com/NHAS/reverse_ssh/internal/terminal"
 	"github.com/NHAS/reverse_ssh/internal/terminal/autocomplete"
+	"github.com/NHAS/reverse_ssh/pkg/asciicast"
 	"github.com/NHAS/reverse_ssh/pkg/logger"
 	"golang.org/x/crypto/ssh"
 )
@@ -33,6 +35,7 @@ func (c *connect) Run(tty io.ReadWriter, line terminal.ParsedLine) error {
 	}
 
 	shell, _ := line.GetArgString("shell")
+	record, _ := line.GetArgString("record")
 
 	client := line.Arguments[len(line.Arguments)-1].Value()
 
@@ -72,8 +75,21 @@ func (c *connect) Run(tty io.ReadWriter, line terminal.ParsedLine) error {
 
 	c.log.Info("Connected to %s", target.RemoteAddr().String())
 
+	var rec *asciicast.Asciicast
+
+	if record != "" {
+		f, err := os.OpenFile(record, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		w, h := term.GetSize()
+		rec = asciicast.NewAsciicastEncoder(f, w, h)
+	}
+
 	term.EnableRaw()
-	err = attachSession(newSession, term, c.user.ShellRequests)
+	err = attachSession(newSession, term, c.user.ShellRequests, rec)
 	if err != nil {
 
 		c.log.Error("Client tried to attach session and failed: %s", err)
@@ -99,6 +115,7 @@ func (c *connect) Help(explain bool) string {
 	return terminal.MakeHelpText(
 		"connect "+autocomplete.RemoteId,
 		"\t--shell\tSet the shell (or program) to start on connection, this also takes an http, https or rssh url that be downloaded to disk and executed",
+		"\t--record <filename>\tRecord session in asciicast",
 	)
 }
 
@@ -134,7 +151,7 @@ func createSession(sshConn ssh.Conn, ptyReq internal.PtyReq, shell string) (sc s
 	return splice, nil
 }
 
-func attachSession(newSession ssh.Channel, currentClientSession io.ReadWriter, currentClientRequests <-chan *ssh.Request) error {
+func attachSession(newSession ssh.Channel, currentClientSession io.ReadWriter, currentClientRequests <-chan *ssh.Request, record *asciicast.Asciicast) error {
 
 	finished := make(chan bool)
 
@@ -158,15 +175,27 @@ func attachSession(newSession ssh.Channel, currentClientSession io.ReadWriter, c
 
 	//newSession being the remote host being controlled
 	go func() {
-		io.Copy(currentClientSession, newSession) // Potentially be more verbose about errors here
-		once.Do(close)                            // Only close the newSession connection once
-
+		if record != nil {
+			teeWriter := io.MultiWriter(currentClientSession, record)
+			io.Copy(teeWriter, newSession)
+		} else {
+			io.Copy(currentClientSession, newSession) // Potentially be more verbose about errors here
+		}
+		once.Do(close) // Only close the newSession connection once
 	}()
 
 RequestsProxyPasser:
 	for {
 		select {
 		case r := <-currentClientRequests:
+			if record != nil {
+				switch r.Type {
+				case "window-change":
+					w, h := internal.ParseDims(r.Payload)
+					record.WriteSize(int(w), int(h))
+				}
+			}
+
 			response, err := internal.SendRequest(*r, newSession)
 			if err != nil {
 				break RequestsProxyPasser

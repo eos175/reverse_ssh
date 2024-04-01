@@ -222,6 +222,10 @@ func (t *Terminal) GetWidth() int {
 	return int(t.termWidth)
 }
 
+func (t *Terminal) GetSize() (width, height int) {
+	return t.termWidth, t.termHeight
+}
+
 func (t *Terminal) AddValueAutoComplete(placement string, trie *trie.Trie) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
