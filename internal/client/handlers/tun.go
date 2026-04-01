@@ -640,9 +640,7 @@ func icmpResponder(s *stack.Stack, nicID tcpip.NICID) error {
 					buff.Reset()
 
 					_, err := rawProto.Read(&buff, tcpip.ReadOptions{})
-
 					if err != nil {
-
 						continue
 					}
 
@@ -650,7 +648,7 @@ func icmpResponder(s *stack.Stack, nicID tcpip.NICID) error {
 
 					hlen := int(iph.HeaderLength())
 					if buff.Len() < hlen {
-						return
+						continue
 					}
 
 					// Reconstruct a ICMP PacketBuffer from bytes.
