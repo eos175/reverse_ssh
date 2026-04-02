@@ -327,6 +327,7 @@ func forwardTCP(tunstats *stat) func(request *tcp.ForwarderRequest) {
 
 			return
 		}
+		defer ep.Close()
 
 		tunstats.tcp.active.Add(1)
 		defer tunstats.tcp.active.Add(-1)
@@ -630,50 +631,53 @@ func icmpResponder(s *stack.Stack, nicID tcpip.NICID) error {
 	go func() {
 		we, ch := waiter.NewChannelEntry(waiter.ReadableEvents)
 		wq.EventRegister(&we)
+		buff := bytes.NewBuffer(make([]byte, 1024))
+
+		defer wq.EventUnregister(&we)
+
 		for {
-			var buff bytes.Buffer
-			_, err := rawProto.Read(&buff, tcpip.ReadOptions{})
+			buff.Reset()
+
+			_, err := rawProto.Read(buff, tcpip.ReadOptions{})
 			if _, ok := err.(*tcpip.ErrWouldBlock); ok {
 				// Wait for data to become available.
-
-				for range ch {
-					buff.Reset()
-
-					_, err := rawProto.Read(&buff, tcpip.ReadOptions{})
-					if err != nil {
-						continue
-					}
-
-					iph := header.IPv4(buff.Bytes())
-
-					hlen := int(iph.HeaderLength())
-					if buff.Len() < hlen {
-						continue
-					}
-
-					// Reconstruct a ICMP PacketBuffer from bytes.
-					view := buffer.MakeWithData(buff.Bytes())
-					packetbuff := stack.NewPacketBuffer(stack.PacketBufferOptions{
-						Payload:            view,
-						ReserveHeaderBytes: hlen,
-					})
-
-					packetbuff.NetworkProtocolNumber = ipv4.ProtocolNumber
-					packetbuff.TransportProtocolNumber = icmp.ProtocolNumber4
-					packetbuff.NetworkHeader().Consume(hlen)
-
-					// Consume the transport header so ProcessICMP can read it via TransportHeader().Slice()
-					if !parse.ICMPv4(packetbuff) {
-						continue
-					}
-
-					go func() {
-						if TryResolve(iph.DestinationAddress().String()) {
-							ProcessICMP(s, packetbuff, nicID)
-						}
-					}()
-				}
+				<-ch
+				continue
 			}
+
+			if err != nil {
+				log.Println("failed to handle icmp, reading failed: ", err)
+				return
+			}
+
+			iph := header.IPv4(buff.Bytes())
+
+			hlen := int(iph.HeaderLength())
+			if buff.Len() < hlen {
+				continue
+			}
+
+			// Reconstruct a ICMP PacketBuffer from bytes.
+			view := buffer.MakeWithData(buff.Bytes())
+			packetbuff := stack.NewPacketBuffer(stack.PacketBufferOptions{
+				Payload:            view,
+				ReserveHeaderBytes: hlen,
+			})
+
+			packetbuff.NetworkProtocolNumber = ipv4.ProtocolNumber
+			packetbuff.TransportProtocolNumber = icmp.ProtocolNumber4
+			packetbuff.NetworkHeader().Consume(hlen)
+
+			// Consume the transport header so ProcessICMP can read it via TransportHeader().Slice()
+			if !parse.ICMPv4(packetbuff) {
+				continue
+			}
+
+			go func() {
+				if TryResolve(iph.DestinationAddress().String()) {
+					ProcessICMP(s, packetbuff, nicID)
+				}
+			}()
 
 		}
 	}()
