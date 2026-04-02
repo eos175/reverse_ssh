@@ -321,7 +321,7 @@ func forwardTCP(tunstats *stat) func(request *tcp.ForwarderRequest) {
 		if errTcp != nil {
 			// ErrConnectionRefused is a transient error
 			if _, ok := errTcp.(*tcpip.ErrConnectionRefused); !ok {
-				log.Printf("could not create endpoint: %s", errTcp)
+				log.Printf("could not create endpoint %q: %s", fwdDst.String(), errTcp)
 			}
 			tunstats.tcp.failures.Add(1)
 
